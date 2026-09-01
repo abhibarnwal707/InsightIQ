@@ -45,8 +45,17 @@ class AllModelsFailedError(OpenRouterError):
 
 
 def _is_retryable(exc: BaseException) -> bool:
+    """Retry transient server/transport faults on the SAME model.
+
+    A 429 is deliberately NOT retried here. On OpenRouter's free tier a 429 means
+    that model is out of capacity or over its rate limit right now, and burning
+    stop_after_attempt(4) backing off against it accomplishes nothing that trying the
+    next model in the fallback list doesn't accomplish faster -- the fallback list is
+    the retry strategy for a 429. Retrying it here also used to cost real budget: see
+    the note in _post_once about failed calls being recorded.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code == 429 or exc.response.status_code >= 500
+        return exc.response.status_code >= 500
     return isinstance(exc, httpx.TransportError)
 
 
@@ -108,7 +117,15 @@ class OpenRouterClient:
             response = await self._http.post(
                 "/chat/completions", json={**payload, "model": model}
             )
-            store.record_llm_call(model)
+            # Only an ACCEPTED request counts against the daily budget. This used to
+            # record before raise_for_status(), so every rejection counted -- and since
+            # 429s were also retried up to 4 times, one logical call could burn four
+            # budget slots without ever producing a completion. Two models in a
+            # three-model fallback list hit their 50/day cap that way in a single run,
+            # on rejections alone. OpenRouter doesn't bill or quota a request it
+            # refused, so neither do we.
+            if response.status_code < 400:
+                store.record_llm_call(model)
         response.raise_for_status()
         return response.json()
 

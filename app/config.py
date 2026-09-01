@@ -14,6 +14,48 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+# Fallback list, tried in order. The per-model daily cap is what makes length matter:
+# OpenRouter's free-tier budget is per model, not per account, so N models is N x the
+# daily headroom (16 x 50 = 800 calls/day here) and a run only dies once EVERY model
+# is exhausted. A three-model list could not finish a single report once two of them
+# were spent.
+#
+# Ordered by how reliably each model returns valid JSON for the structured-output
+# calls that dominate this pipeline: native structured_outputs support first, then
+# response_format support, then the rest (which still work, because
+# OpenRouterClient.structured() also inlines the schema as a prompt instruction and
+# gets one repair retry).
+#
+# Verified against https://openrouter.ai/api/v1/models on 2026-09-01. That roster
+# rotates often -- re-check it rather than trusting this list indefinitely. Two free
+# models are deliberately excluded: nvidia/nemotron-3.5-content-safety:free is a
+# safety classifier, not a chat model, and cohere/north-mini-code:free is a
+# code-completion specialist; neither does claim extraction usefully.
+DEFAULT_OPENROUTER_MODELS: list[str] = [
+    # native structured_outputs
+    "z-ai/glm-5.2:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "dots-studio/dots-3-note-preview:free",
+    # response_format
+    "minimax/minimax-m3:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "minimax/minimax-m2.7:free",
+    # schema-by-prompt only
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "thinkingmachines/inkling:free",
+    "thinkingmachines/inkling-small:free",
+    "inclusionai/ling-3.0-flash-fin:free",
+    "poolside/laguna-s-2.1:free",
+    "poolside/laguna-xs-2.1:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    # last resort: structured-output capable but only 2.6B params, so weakest at
+    # extraction quality -- better than failing the run outright.
+    "liquid/lfm-2.5-2.6b:free",
+]
+
+
 @dataclass(frozen=True)
 class Settings:
     openrouter_api_key: str = field(default_factory=lambda: os.environ.get("OPENROUTER_API_KEY", ""))
@@ -22,10 +64,7 @@ class Settings:
     )
     openrouter_models: list[str] = field(
         default_factory=lambda: _split_csv(
-            os.environ.get(
-                "OPENROUTER_MODELS",
-                "z-ai/glm-5.2:free,minimax/minimax-m3:free,google/gemma-4-31b-it:free",
-            )
+            os.environ.get("OPENROUTER_MODELS", ",".join(DEFAULT_OPENROUTER_MODELS))
         )
     )
     openrouter_max_concurrency: int = field(

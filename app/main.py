@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from app.cache import store
+from app.config import settings
 from app.llm.client import AllModelsFailedError, BudgetExceededError, OpenRouterClient
 from app.orchestrator import run_due_diligence
 from app.render.export import default_filename, save_report
@@ -22,7 +23,25 @@ app = FastAPI(title="InsightIQ", description="Multi-source due-diligence agent")
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "llm_calls_used_today": store.get_usage_today()}
+    """Health plus remaining per-model budget.
+
+    The daily cap is per model, so a single total hides the number that actually
+    decides whether a run can finish: how many models still have headroom.
+    """
+    budget = settings.openrouter_daily_call_budget
+    used_by_model = store.get_usage_by_model_today()
+    models = [
+        {"model": m, "used": used_by_model.get(m, 0), "remaining": max(0, budget - used_by_model.get(m, 0))}
+        for m in settings.openrouter_models
+    ]
+    return {
+        "status": "ok",
+        "llm_calls_used_today": store.get_usage_today(),
+        "daily_budget_per_model": budget,
+        "models_with_headroom": sum(1 for m in models if m["remaining"] > 0),
+        "total_calls_remaining": sum(m["remaining"] for m in models),
+        "models": models,
+    }
 
 
 class PingResult(BaseModel):

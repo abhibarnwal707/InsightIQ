@@ -135,3 +135,74 @@ def test_markdown_fenced_json_is_parsed():
     parsed, err = OpenRouterClient._parse_and_validate(fenced, Answer)
     assert err is None
     assert parsed.answer == "pong"
+
+
+@pytest.mark.asyncio
+async def test_rejected_429_does_not_consume_daily_budget(isolated_db):
+    """A refused request produces no completion, so it must not count against the
+    per-model daily cap. It used to: record_llm_call ran before raise_for_status."""
+    with respx.mock(base_url=settings.openrouter_base_url) as mock:
+        mock.post("/chat/completions").mock(return_value=httpx.Response(429))
+        async with OpenRouterClient() as client:
+            with pytest.raises(AllModelsFailedError):
+                await client.structured(
+                    [{"role": "user", "content": "ping"}],
+                    Answer,
+                    models=["some/model:free"],
+                )
+    assert store.get_usage_today() == 0
+    assert store.get_usage_by_model_today() == {}
+
+
+@pytest.mark.asyncio
+async def test_429_falls_through_to_next_model_without_retrying(isolated_db):
+    """One attempt per model on a 429 -- the fallback list IS the retry strategy.
+    Previously this burned 4 attempts (and 4 budget slots) before moving on."""
+    with respx.mock(base_url=settings.openrouter_base_url) as mock:
+        route = mock.post("/chat/completions").mock(
+            side_effect=[
+                httpx.Response(429),
+                httpx.Response(200, json=_completion('{"answer": "pong"}')),
+            ]
+        )
+        async with OpenRouterClient() as client:
+            result, model_used = await client.structured(
+                [{"role": "user", "content": "ping"}],
+                Answer,
+                models=["busy/model:free", "good/model:free"],
+            )
+
+        assert route.call_count == 2  # exactly one attempt on the busy model
+
+    assert result.answer == "pong"
+    assert model_used == "good/model:free"
+    # only the model that actually answered was charged
+    assert store.get_usage_by_model_today() == {"good/model:free": 1}
+
+
+@pytest.mark.asyncio
+async def test_server_errors_are_still_retried_on_the_same_model(isolated_db):
+    """5xx is a transient fault, unlike 429 -- retry it rather than burning a model."""
+    with respx.mock(base_url=settings.openrouter_base_url) as mock:
+        mock.post("/chat/completions").mock(
+            side_effect=[
+                httpx.Response(503),
+                httpx.Response(200, json=_completion('{"answer": "pong"}')),
+            ]
+        )
+        async with OpenRouterClient() as client:
+            result, model_used = await client.structured(
+                [{"role": "user", "content": "ping"}], Answer, models=["flaky/model:free"]
+            )
+
+    assert result.answer == "pong"
+    assert model_used == "flaky/model:free"
+    assert store.get_usage_by_model_today() == {"flaky/model:free": 1}
+
+
+def test_default_model_list_is_long_enough_to_survive_exhaustion():
+    from app.config import DEFAULT_OPENROUTER_MODELS
+
+    assert len(DEFAULT_OPENROUTER_MODELS) >= 10
+    assert len(set(DEFAULT_OPENROUTER_MODELS)) == len(DEFAULT_OPENROUTER_MODELS)
+    assert all(m.endswith(":free") for m in DEFAULT_OPENROUTER_MODELS)

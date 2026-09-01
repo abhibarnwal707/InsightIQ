@@ -95,8 +95,12 @@ below where blocking the event loop briefly would matter here).
 
 ```bash
 curl http://localhost:8000/health
-# {"status": "ok", "llm_calls_used_today": 12}
+# {"status": "ok", "llm_calls_used_today": 12, "daily_budget_per_model": 50,
+#  "models_with_headroom": 14, "total_calls_remaining": 696, "models": [...]}
 ```
+
+Because the free-tier cap is per model, the number that decides whether a run can
+finish is `models_with_headroom`, not the total — hence the per-model breakdown.
 
 **Run a report**
 
@@ -250,7 +254,10 @@ Decisions made deliberately, with the alternative considered:
   (confirmed empirically, not just per the docs), and free-model capacity is shared
   across every OpenRouter user hitting that model right now, not just your account's
   quota — expect occasional 429s from genuine platform congestion regardless of your
-  own usage.
+  own usage. This is why the fallback list is 16 models deep rather than 3: in a
+  live test five consecutive models returned 429 from shared congestion before the
+  sixth answered. A 429 is not retried on the same model (the list is the retry
+  strategy) and costs no budget, since a refused request produces no completion.
 - **EDGAR's full-text search returns metadata, not article/filing body text.**
   Where real passage text is needed (financials narrative, legal proceedings,
   competitors, key people), the agents fetch and chunk the actual filing instead —
