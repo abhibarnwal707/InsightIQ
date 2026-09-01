@@ -237,7 +237,11 @@ async def run_financials_agent(entity: ResolvedEntity, client: OpenRouterClient)
         data_gaps.append("XBRL concepts unavailable: " + "; ".join(missing_concepts))
     if not narrative_passages:
         data_gaps.append(
-            "No 10-K narrative text could be retrieved; financial claims are limited to "
+            f"No narrative passage matching financial-discussion keywords was found in the "
+            f"{filing_meta['form']} filed {filing_meta.get('filing_date', 'unknown date')}; "
+            "financial claims are limited to structured XBRL figures."
+            if filing_meta
+            else "No 10-K narrative text could be retrieved; financial claims are limited to "
             "structured XBRL figures."
         )
 

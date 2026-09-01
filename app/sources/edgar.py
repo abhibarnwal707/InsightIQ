@@ -123,19 +123,40 @@ def filing_document_url(cik: str, accession: str, primary_document: str) -> str:
 
 
 async def get_latest_filing_meta(cik: str, forms: tuple[str, ...] = ("10-K",)) -> dict[str, Any] | None:
-    """Most recent filing of any of `forms` from the submissions API's recent-filings window."""
+    """Most recent filing from the submissions API's recent-filings window.
+
+    `forms` is a PRIORITY ORDER, not a set: the newest "10-K" wins over a strictly
+    newer "10-K/A", and a later form is only considered if no filing of an earlier
+    one exists at all.
+
+    This ordering is the whole point. A 10-K/A is almost always a Part III amendment
+    carrying only executive-compensation content -- no MD&A, no Competition section,
+    no Legal Proceedings -- so picking it merely because it is newer silently swaps
+    the annual report for a compensation exhibit, and every narrative section then
+    grounds itself in the wrong document. Observed live on Tesla (CIK 0001318605):
+    the 2026-04-30 10-K/A contains zero occurrences of "competition", "legal
+    proceedings" or "results of operations", while the 2026-01-29 10-K contains
+    12, 7 and 18 respectively.
+    """
     profile = await get_submission_profile(cik)
     recent = profile.get("filings", {}).get("recent", {})
     form_list = recent.get("form", [])
-    for i, form in enumerate(form_list):
-        if form in forms:
-            return {
-                "form": form,
-                "accession": recent["accessionNumber"][i],
-                "filing_date": recent["filingDate"][i],
-                "primary_document": recent["primaryDocument"][i],
-                "report_date": recent.get("reportDate", [None] * len(form_list))[i],
-            }
+    report_dates = recent.get("reportDate", [None] * len(form_list))
+
+    for wanted in forms:
+        matches = [i for i, form in enumerate(form_list) if form == wanted]
+        if not matches:
+            continue
+        # EDGAR returns these arrays newest-first, but sort explicitly rather than
+        # trusting that ordering for a choice this consequential.
+        i = max(matches, key=lambda idx: recent["filingDate"][idx])
+        return {
+            "form": form_list[i],
+            "accession": recent["accessionNumber"][i],
+            "filing_date": recent["filingDate"][i],
+            "primary_document": recent["primaryDocument"][i],
+            "report_date": report_dates[i] if i < len(report_dates) else None,
+        }
     return None
 
 

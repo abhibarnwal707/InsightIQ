@@ -5,12 +5,14 @@ import logging
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from app.cache import store
 from app.llm.client import AllModelsFailedError, BudgetExceededError, OpenRouterClient
 from app.orchestrator import run_due_diligence
+from app.render.export import default_filename, save_report
+from app.render.html import render_html
 from app.render.markdown import render_markdown
 
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +53,10 @@ class ResearchRequest(BaseModel):
 
 @app.post("/research")
 async def research(
-    request: ResearchRequest, format: Literal["json", "markdown"] = "json"
+    request: ResearchRequest,
+    format: Literal["json", "markdown", "html"] = "json",
+    download: bool = False,
+    save: bool = False,
 ):
     """Run (or serve from cache) a full due-diligence report for `company_name`.
 
@@ -59,6 +64,11 @@ async def research(
     agents -> consistency check) before responding. No progress streaming (SSE/polling)
     is implemented despite PLAN.md's tech-stack section suggesting it -- a disclosed
     scope cut, not a silent one; see README for why.
+
+    `format=html` returns a self-contained report document (see app/render/html.py for
+    why HTML is the shareable-file format here). `download=true` sets a
+    Content-Disposition attachment header so a browser saves it instead of rendering it
+    inline; `save=true` additionally writes a copy server-side under ./reports/.
     """
     if not request.company_name.strip():
         raise HTTPException(status_code=422, detail="company_name must not be empty")
@@ -70,6 +80,24 @@ async def research(
     except AllModelsFailedError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if format == "markdown":
-        return PlainTextResponse(render_markdown(report), media_type="text/markdown")
-    return report.model_dump(mode="json")
+    saved_path = save_report(report, fmt=format) if save else None
+
+    if format == "json":
+        body = report.model_dump(mode="json")
+        if saved_path:
+            body["saved_to"] = str(saved_path)
+        return body
+
+    headers: dict[str, str] = {}
+    if download:
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{default_filename(report, format)}"'
+        )
+    if saved_path:
+        headers["X-Report-Saved-To"] = str(saved_path)
+
+    if format == "html":
+        return HTMLResponse(render_html(report), headers=headers)
+    return PlainTextResponse(
+        render_markdown(report), media_type="text/markdown", headers=headers
+    )

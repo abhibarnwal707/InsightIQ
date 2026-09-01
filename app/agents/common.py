@@ -71,18 +71,30 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 150) -> list[st
 
 
 def select_relevant_chunks(chunks: list[str], keywords: list[str], top_k: int = 6) -> list[str]:
-    """Cheap keyword-count relevance ranking -- no embeddings/vector DB (keep infra minimal)."""
+    """Cheap keyword-count relevance ranking -- no embeddings/vector DB (keep infra minimal).
+
+    Returns ONLY chunks that actually match at least one keyword. If nothing matches,
+    this returns an empty list so the caller reports an honest data gap.
+
+    It used to fall back to "the first top_k chunks" when nothing scored, which quietly
+    converted "this document has no relevant section" into "here are some arbitrary
+    passages" -- and the extractor, doing its job, would dutifully pull well-grounded
+    claims that had nothing to do with the section. Observed live: a Tesla competitors
+    section whose passages contained no competitor content returned five confidently
+    cited claims about a director's biography and the compensation committee, all
+    passing entailment because they *were* supported by the (irrelevant) passages
+    they cited. Entailment verifies a claim against its passage; it cannot catch a
+    passage that should never have been selected, so the honest gap has to happen here.
+    """
     keywords_l = [k.lower() for k in keywords]
     scored = []
     for i, chunk in enumerate(chunks):
         chunk_l = chunk.lower()
         score = sum(chunk_l.count(k) for k in keywords_l)
-        scored.append((score, i, chunk))
+        if score > 0:
+            scored.append((score, i, chunk))
     scored.sort(key=lambda t: (-t[0], t[1]))
-    top = [c for score, _, c in scored[:top_k] if score > 0]
-    if not top:
-        top = [c for _, _, c in scored[:top_k]]
-    return top
+    return [c for _, _, c in scored[:top_k]]
 
 
 async def extract_claims(

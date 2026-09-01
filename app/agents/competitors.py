@@ -86,6 +86,26 @@ async def run_competitors_agent(entity: ResolvedEntity, client: OpenRouterClient
 
     chunks = chunk_text(text, chunk_size=1400, overlap=150)
     relevant = select_relevant_chunks(chunks, _COMPETITOR_KEYWORDS, top_k=4)
+    if not relevant:
+        # No competition-related passage exists in this filing. Say so, rather than
+        # extracting from whatever text happened to be first -- see select_relevant_chunks.
+        return ReportSection(
+            section="competitors",
+            summary=(
+                f"The latest {meta['form']} for {entity.company_name} contains no passage "
+                "discussing competition, competitors, or market position."
+            ),
+            claims=[],
+            confidence=0.0,
+            confidence_rationale="No competition-related passages found; nothing to ground claims in.",
+            data_gaps=[
+                f"No text matching competition keywords was found in the {meta['form']} "
+                f"filed {meta.get('filing_date', 'unknown date')} (accession {meta['accession']}).",
+                "This build has no general web-search integration to corroborate competitor "
+                "research outside SEC filings.",
+            ],
+            model_used="n/a",
+        )
     url = edgar.filing_document_url(entity.cik, meta["accession"], meta["primary_document"])
     published_at = datetime.fromisoformat(meta["filing_date"]) if meta.get("filing_date") else None
 

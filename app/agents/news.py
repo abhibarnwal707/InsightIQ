@@ -27,17 +27,22 @@ def _parse_seendate(value: str | None) -> datetime | None:
 
 
 async def run_news_agent(entity: ResolvedEntity, client: OpenRouterClient) -> ReportSection:
-    query = entity.company_name
+    query = gdelt.format_query(entity.company_name)
     try:
         articles = await gdelt.search_articles(query, timespan="60d", max_records=20)
     except Exception as exc:  # noqa: BLE001
+        detail = str(exc) or f"{type(exc).__name__} (no error detail)"
         return ReportSection(
             section="news",
             summary=f"News retrieval failed for {entity.company_name}.",
             claims=[],
             confidence=0.0,
             confidence_rationale="GDELT request failed; nothing to ground news claims in.",
-            data_gaps=[f"GDELT request failed: {exc}"],
+            data_gaps=[
+                f"GDELT news retrieval failed: {detail}",
+                "News coverage is therefore absent from this report entirely -- treat the "
+                "lack of a news section as missing data, not as an absence of news.",
+            ],
             model_used="n/a",
         )
 

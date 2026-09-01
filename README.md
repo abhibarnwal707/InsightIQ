@@ -153,6 +153,35 @@ Returns `text/markdown` — confidence labeled High/Medium/Low/None, claims as a
 numbered list with linked citations, data gaps and contradictions called out
 explicitly.
 
+**As a shareable report file (HTML)**
+
+```bash
+curl -X POST "http://localhost:8000/research?format=html&download=true" \
+  -H "Content-Type: application/json" \
+  -d '{"company_name": "Apple"}' \
+  -o apple-report.html
+```
+
+HTML is the format for a file a person actually opens: it renders on double-click in
+any browser with no tooling, keeps every citation clickable, works offline as a
+single self-contained file (CSS inlined, no external assets), and prints to PDF via
+Ctrl+P — none of which Markdown gives you (on Windows a `.md` opens as raw text) and
+none of which needs a new dependency, unlike PDF (weasyprint/GTK) or DOCX.
+
+Citations are numbered academic-style rather than a bare `[source]` link per claim:
+sources are deduplicated across the whole report into a reference list, each claim
+carries a superscript `[n]`, and each reference lists the sections citing it. That
+makes thin sourcing visible — the Tesla run below collapses 37 claims onto just 6
+distinct sources, which per-claim links actively hide.
+
+Add `&save=true` (any format) to also write a copy server-side under `./reports/`.
+
+**Converting an already-saved JSON response**
+
+```bash
+python -m app.render.export response.json -o report.html      # or -f markdown
+```
+
 **Repeat request within the cache TTL**
 
 Same body, same endpoint → `llm_calls_used: 0` in the response, proving it came from
@@ -226,6 +255,13 @@ Decisions made deliberately, with the alternative considered:
   Where real passage text is needed (financials narrative, legal proceedings,
   competitors, key people), the agents fetch and chunk the actual filing instead —
   full-text search alone isn't sufficient for grounded extraction.
+- **GDELT's API host is separately blockable.** `api.gdeltproject.org` is a single
+  IPv4 host with no auth, and it throttles by silently dropping TCP connections
+  rather than returning 429 — so it fails as a connect timeout, not an HTTP error,
+  and can stay unreachable for long stretches while `www`/`data.gdeltproject.org`
+  answer normally. The news path uses a short (8s) connect timeout so a blackholed
+  host fails fast instead of stalling the whole synchronous run, and reports the
+  failure as an explicit data gap. It cannot make the host reachable.
 - **No authentication or multi-tenancy.** `/research` is open; there's no per-caller
   quota separate from the global daily LLM/CourtListener budgets.
 - **Entity resolution mistakes propagate.** Every section keys off the resolved
@@ -235,7 +271,9 @@ Decisions made deliberately, with the alternative considered:
 - **US SEC registrants only.** Financials, legal filings, competitors, and key-people
   sourcing all depend on EDGAR. Non-US and private companies get an honestly empty
   section with the gap stated, not a guess — but genuinely have far less coverage.
-- **No PDF output**, JSON and Markdown only.
+- **No native PDF output.** JSON, Markdown and HTML; PDF is via the browser's
+  print-to-PDF rather than a server-side renderer, which avoids a heavyweight
+  dependency but means the API can't hand back a `.pdf` directly.
 
 ## What to improve next
 
