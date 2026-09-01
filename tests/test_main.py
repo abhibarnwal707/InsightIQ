@@ -1,0 +1,61 @@
+from fastapi.testclient import TestClient
+
+from app import main
+from app.llm.schemas import DueDiligenceReport
+
+
+def _stub_report() -> DueDiligenceReport:
+    return DueDiligenceReport(
+        company="TestCo",
+        resolved_entity={"company_name": "TestCo", "is_public": True, "cik": "0000000001"},
+        sections=[],
+        contradictions=[],
+        llm_calls_used=3,
+    )
+
+
+def test_research_endpoint_returns_json_report(isolated_db, monkeypatch):
+    async def fake_run_due_diligence(company_name, client):
+        assert company_name == "TestCo"
+        return _stub_report()
+
+    monkeypatch.setattr(main, "run_due_diligence", fake_run_due_diligence)
+
+    client = TestClient(main.app)
+    resp = client.post("/research", json={"company_name": "TestCo"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["company"] == "TestCo"
+    assert body["llm_calls_used"] == 3
+
+
+def test_research_endpoint_markdown_format(isolated_db, monkeypatch):
+    async def fake_run_due_diligence(company_name, client):
+        return _stub_report()
+
+    monkeypatch.setattr(main, "run_due_diligence", fake_run_due_diligence)
+
+    client = TestClient(main.app)
+    resp = client.post("/research?format=markdown", json={"company_name": "TestCo"})
+    assert resp.status_code == 200
+    assert "text/markdown" in resp.headers["content-type"]
+    assert "# Due Diligence Report: TestCo" in resp.text
+
+
+def test_research_endpoint_rejects_empty_company_name(isolated_db):
+    client = TestClient(main.app)
+    resp = client.post("/research", json={"company_name": "   "})
+    assert resp.status_code == 422
+
+
+def test_research_endpoint_surfaces_budget_exceeded_as_429(isolated_db, monkeypatch):
+    from app.llm.client import BudgetExceededError
+
+    async def fake_run_due_diligence(company_name, client):
+        raise BudgetExceededError("daily budget spent")
+
+    monkeypatch.setattr(main, "run_due_diligence", fake_run_due_diligence)
+
+    client = TestClient(main.app)
+    resp = client.post("/research", json={"company_name": "TestCo"})
+    assert resp.status_code == 429

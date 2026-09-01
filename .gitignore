@@ -1,0 +1,11 @@
+PLAN.md
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+*.sqlite3
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
