@@ -246,7 +246,7 @@ async def run_financials_agent(entity: ResolvedEntity, client: OpenRouterClient)
         )
 
     headline = (
-        f"{entity.company_name}: " + "; ".join(c.text for c in xbrl_claims[:4])
+        "; ".join(c.text for c in xbrl_claims[:4])
         if xbrl_claims
         else f"{entity.company_name}: no structured financial figures were available from XBRL."
     )
