@@ -61,22 +61,23 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class OpenRouterClient:
     def __init__(self) -> None:
-        if not settings.openrouter_api_key:
-            raise OpenRouterError(
-                "OPENROUTER_API_KEY is not set. Put it in .env (see .env.example)."
-            )
         self._models = list(settings.openrouter_models)
         if not self._models:
             raise OpenRouterError("OPENROUTER_MODELS is empty — configure at least one model.")
         self._semaphore = asyncio.Semaphore(settings.openrouter_max_concurrency)
+        headers = {
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/insightiq",
+            "X-Title": "InsightIQ Due Diligence Agent",
+        }
+        # No key is required to talk to a local OpenAI-compatible router (e.g. OmniRoute)
+        # pointed at via OPENROUTER_BASE_URL -- only add the header when one is configured,
+        # since OpenRouter itself does require it.
+        if settings.openrouter_api_key:
+            headers["Authorization"] = f"Bearer {settings.openrouter_api_key}"
         self._http = httpx.AsyncClient(
             base_url=settings.openrouter_base_url,
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/insightiq",
-                "X-Title": "InsightIQ Due Diligence Agent",
-            },
+            headers=headers,
             timeout=httpx.Timeout(90.0),
         )
 
